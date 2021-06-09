@@ -240,6 +240,15 @@ class Operator(db.Model):
         return operator
 
 
+class BuildTag(db.Model):
+    """Extra tag associated with built index image."""
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String, nullable=False, unique=True)
+    request_id = db.Column(db.Integer, db.ForeignKey('request.id'), index=True, nullable=False)
+    request = db.relationship('Request', foreign_keys=[request_id], back_populates='build_tags')
+
+
 class RequestRmOperator(db.Model):
     """An association table between rm requests and the operators they contain."""
 
@@ -304,6 +313,7 @@ class Request(db.Model):
         order_by='RequestState.updated',
     )
     user = db.relationship('User', back_populates='requests')
+    build_tags = db.relationship('BuildTag', back_populates='request')
 
     __mapper_args__ = {
         'polymorphic_identity': RequestTypeMapping.__members__['generic'].value,
@@ -624,6 +634,7 @@ def get_request_query_options(verbose=False):
         joinedload(RequestAdd.from_index_resolved),
         joinedload(RequestAdd.index_image),
         joinedload(RequestAdd.index_image_resolved),
+        joinedload(RequestAdd.build_tags),
         joinedload(RequestRegenerateBundle.bundle_image),
         joinedload(RequestRegenerateBundle.from_bundle_image),
         joinedload(RequestRegenerateBundle.from_bundle_image_resolved),
@@ -634,6 +645,7 @@ def get_request_query_options(verbose=False):
         joinedload(RequestRm.index_image),
         joinedload(RequestRm.index_image_resolved),
         joinedload(RequestRm.operators),
+        joinedload(RequestRm.build_tags),
     ]
     if verbose:
         query_options.append(joinedload(Request.states))

@@ -132,7 +132,7 @@ def _add_bundles_missing_in_source(
     )
     _build_image(base_dir, 'index.Dockerfile', request_id, arch)
     _push_image(request_id, arch)
-    _create_and_push_manifest_list(request_id, [arch])
+    _create_and_push_manifest_list(request_id, [arch], [])
     log.info('New index image created')
 
     return missing_bundles
@@ -250,7 +250,7 @@ def handle_merge_request(
             file_mode=(stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP),
         )
 
-    output_pull_spec = _create_and_push_manifest_list(request_id, prebuild_info['arches'])
+    output_pull_spec = _create_and_push_manifest_list(request_id, prebuild_info['arches'], [])
     _update_index_image_pull_spec(
         output_pull_spec,
         request_id,

@@ -105,59 +105,70 @@ def _cleanup():
 
 
 @retry(attempts=3, wait_on=IIBError, logger=log)
-def _create_and_push_manifest_list(request_id, arches):
+def _create_and_push_manifest_list(request_id, arches, build_tags):
     """
     Create and push the manifest list to the configured registry.
 
     :param int request_id: the ID of the IIB build request
     :param iter arches: an iterable of arches to create the manifest list for
+    :param build_tags: list of extra tag to use for intermetdiate index image
     :return: the pull specification of the manifest list
     :rtype: str
     :raises IIBError: if creating or pushing the manifest list fails
     """
-    output_pull_spec = get_rebuilt_image_pull_spec(request_id)
-    log.info('Creating the manifest list %s', output_pull_spec)
-    with tempfile.TemporaryDirectory(prefix='iib-') as temp_dir:
-        manifest_yaml = os.path.abspath(os.path.join(temp_dir, 'manifest.yaml'))
-        with open(manifest_yaml, 'w+') as manifest_yaml_f:
-            manifest_yaml_f.write(
-                textwrap.dedent(
-                    f'''\
-                    image: {output_pull_spec}
-                    manifests:
-                    '''
+    output_pull_specs = [get_rebuilt_image_pull_spec(request_id)]
+    if build_tags:
+        conf = get_worker_config()
+        for tag in build_tags:
+            output_pull_specs.append(
+                conf['iib_image_push_template'].format(
+                    registry=conf['iib_registry'], request_id=tag
                 )
             )
-            for arch in sorted(arches):
-                arch_pull_spec = _get_external_arch_pull_spec(request_id, arch)
-                log.debug(
-                    'Adding the manifest %s to the manifest list %s',
-                    arch_pull_spec,
-                    output_pull_spec,
-                )
+
+    for output_pull_spec in output_pull_specs:
+        log.info('Creating the manifest list %s', output_pull_spec)
+        with tempfile.TemporaryDirectory(prefix='iib-') as temp_dir:
+            manifest_yaml = os.path.abspath(os.path.join(temp_dir, 'manifest.yaml'))
+            with open(manifest_yaml, 'w+') as manifest_yaml_f:
                 manifest_yaml_f.write(
                     textwrap.dedent(
                         f'''\
-                        - image: {arch_pull_spec}
-                          platform:
-                            architecture: {arch}
-                            os: linux
+                        image: {output_pull_spec}
+                        manifests:
                         '''
                     )
                 )
-            # Return back to the beginning of the file to output it to the logs
-            manifest_yaml_f.seek(0)
-            log.debug(
-                'Created the manifest configuration with the following content:\n%s',
-                manifest_yaml_f.read(),
+                for arch in sorted(arches):
+                    arch_pull_spec = _get_external_arch_pull_spec(request_id, arch)
+                    log.debug(
+                        'Adding the manifest %s to the manifest list %s',
+                        arch_pull_spec,
+                        output_pull_spec,
+                    )
+                    manifest_yaml_f.write(
+                        textwrap.dedent(
+                            f'''\
+                            - image: {arch_pull_spec}
+                              platform:
+                                architecture: {arch}
+                                os: linux
+                            '''
+                        )
+                    )
+                # Return back to the beginning of the file to output it to the logs
+                manifest_yaml_f.seek(0)
+                log.debug(
+                    'Created the manifest configuration with the following content:\n%s',
+                    manifest_yaml_f.read(),
+                )
+
+            run_cmd(
+                ['manifest-tool', 'push', 'from-spec', manifest_yaml],
+                exc_msg=f'Failed to push the manifest list to {output_pull_spec}',
             )
 
-        run_cmd(
-            ['manifest-tool', 'push', 'from-spec', manifest_yaml],
-            exc_msg=f'Failed to push the manifest list to {output_pull_spec}',
-        )
-
-    return output_pull_spec
+    return output_pull_specs
 
 
 def _update_index_image_pull_spec(
@@ -737,6 +748,7 @@ def handle_add_request(
     greenwave_config=None,
     binary_image_config=None,
     deprecation_list=None,
+    build_tags=None,
 ):
     """
     Coordinate the the work needed to build the index image with the input bundles.
@@ -768,6 +780,7 @@ def handle_add_request(
         ``binary_image`` to use.
     :param list deprecation_list: list of deprecated bundles for the target index image. Defaults
         to ``None``.
+    :param list build_tags: List of tags which will be applied to intermediate index images.
     :raises IIBError: if the index image build fails or legacy support is required and one of
         ``cnr_token`` or ``organization`` is not specified.
     """
@@ -890,14 +903,14 @@ def handle_add_request(
         )
 
     set_request_state(request_id, 'in_progress', 'Creating the manifest list')
-    output_pull_spec = _create_and_push_manifest_list(request_id, arches)
+    output_pull_specs = _create_and_push_manifest_list(request_id, arches, build_tags)
     if legacy_support_packages:
         export_legacy_packages(
-            legacy_support_packages, request_id, output_pull_spec, cnr_token, organization
+            legacy_support_packages, request_id, output_pull_specs[0], cnr_token, organization
         )
 
     _update_index_image_pull_spec(
-        output_pull_spec,
+        output_pull_specs[0],
         request_id,
         arches,
         from_index,
@@ -923,6 +936,7 @@ def handle_rm_request(
     overwrite_from_index_token=None,
     distribution_scope=None,
     binary_image_config=None,
+    build_tags=[],
 ):
     """
     Coordinate the work needed to remove the input operators and rebuild the index image.
@@ -945,6 +959,7 @@ def handle_rm_request(
         ``None``.
     :param dict binary_image_config: the dict of config required to identify the appropriate
         ``binary_image`` to use.
+    :param list build_tags: List of tags which will be applied to intermediate index images.
     :raises IIBError: if the index image build fails.
     """
     _cleanup()
@@ -992,7 +1007,7 @@ def handle_rm_request(
             _push_image(request_id, arch)
 
     set_request_state(request_id, 'in_progress', 'Creating the manifest list')
-    output_pull_spec = _create_and_push_manifest_list(request_id, arches)
+    output_pull_spec = _create_and_push_manifest_list(request_id, arches, build_tags)
 
     _update_index_image_pull_spec(
         output_pull_spec,

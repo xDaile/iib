@@ -36,14 +36,27 @@ def test_cleanup(mock_rdc, mock_run_cmd):
 
 @mock.patch('iib.workers.tasks.build.tempfile.TemporaryDirectory')
 @mock.patch('iib.workers.tasks.build.run_cmd')
-def test_create_and_push_manifest_list(mock_run_cmd, mock_td, tmp_path):
+@mock.patch('iib.workers.tasks.build.open')
+def test_create_and_push_manifest_list(mock_open, mock_run_cmd, mock_td, tmp_path):
     mock_td.return_value.__enter__.return_value = tmp_path
 
-    build._create_and_push_manifest_list(3, {'amd64', 's390x'})
+    output = []
+    mock_open().__enter__().write.side_effect = lambda x: output.append(x)
+    build._create_and_push_manifest_list(3, {'amd64', 's390x'}, ['extra_build_tag1'])
 
-    expected_manifest = textwrap.dedent(
+    expected_manifests = textwrap.dedent(
         '''\
         image: registry:8443/iib-build:3
+        manifests:
+        - image: registry:8443/iib-build:3-amd64
+          platform:
+            architecture: amd64
+            os: linux
+        - image: registry:8443/iib-build:3-s390x
+          platform:
+            architecture: s390x
+            os: linux
+        image: registry:8443/iib-build:extra_build_tag1
         manifests:
         - image: registry:8443/iib-build:3-amd64
           platform:
@@ -56,9 +69,12 @@ def test_create_and_push_manifest_list(mock_run_cmd, mock_td, tmp_path):
         '''
     )
     manifest = os.path.join(tmp_path, 'manifest.yaml')
-    with open(manifest, 'r') as manifest_f:
-        assert manifest_f.read() == expected_manifest
-    mock_run_cmd.assert_called_once()
+    assert mock_open.mock_calls.count(mock.call('%s/manifest.yaml' % tmp_path, 'w+')) == 2
+    mock_open().__enter__().write.assert_has_calls(
+        [mock.call('image: registry:8443/iib-build:3\nmanifests:\n')]
+    )
+    assert "".join(output) == expected_manifests
+    assert len(mock_run_cmd.mock_calls) == 2
     manifest_tool_args = mock_run_cmd.call_args[0][0]
     assert manifest_tool_args[0] == 'manifest-tool'
     assert manifest in manifest_tool_args
@@ -492,6 +508,7 @@ def test_handle_add_request(
         greenwave_config,
         binary_image_config=binary_image_config,
         deprecation_list=deprecation_list,
+        build_tags=["extra_tag1", "extra_tag2"],
     )
 
     mock_cleanup.assert_called_once()

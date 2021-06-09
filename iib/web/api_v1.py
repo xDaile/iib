@@ -58,6 +58,7 @@ def _get_rm_args(payload, request, overwrite_from_index):
         payload.get('overwrite_from_index_token'),
         request.distribution_scope,
         flask.current_app.config['IIB_BINARY_IMAGE_CONFIG'],
+        payload.get('build_tags', []),
     ]
 
 
@@ -85,6 +86,7 @@ def _get_add_args(payload, request, overwrite_from_index, celery_queue):
         flask.current_app.config['IIB_GREENWAVE_CONFIG'].get(celery_queue),
         flask.current_app.config['IIB_BINARY_IMAGE_CONFIG'],
         payload.get('deprecation_list', []),
+        payload.get('build_tags', []),
     ]
 
 

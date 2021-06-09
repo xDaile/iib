@@ -161,7 +161,7 @@ def test_get_healthcheck_ok(app, client, db):
 
 @pytest.mark.parametrize(
     ("bundles", "exp_bundles"),
-    (([1, 2, 3, 4], [1, 2, 3, 4]), ([], []), ([1, 2, 1, 3, 1, 4, 3], [1, 2, 3, 4]),),
+    (([1, 2, 3, 4], [1, 2, 3, 4]), ([], []), ([1, 2, 1, 3, 1, 4, 3], [1, 2, 3, 4])),
 )
 def test_get_unique_bundles(bundles, exp_bundles, app):
     tmp_uniq = _get_unique_bundles(bundles)
@@ -400,7 +400,7 @@ def test_rm_operators_overwrite_not_allowed(mock_smfsc, client, db):
             {'add_arches': ['s390x'], 'binary_image': 'binary:image'},
             '"from_index" must be specified if no bundles are specified',
         ),
-        ({'add_arches': ['s390x']}, '"from_index" must be specified if no bundles are specified',),
+        ({'add_arches': ['s390x']}, '"from_index" must be specified if no bundles are specified'),
         (
             {
                 'bundles': ['some:thing'],
@@ -652,9 +652,9 @@ def test_add_bundle_overwrite_token_redacted(mock_smfsc, mock_har, app, auth_env
     assert rv.status_code == 201
     mock_har.apply_async.assert_called_once()
     # Fourth to last element in args is the overwrite_from_index parameter
-    assert mock_har.apply_async.call_args[1]['args'][-6] is True
+    assert mock_har.apply_async.call_args[1]['args'][-7] is True
     # Third to last element in args is the overwrite_from_index_token parameter
-    assert mock_har.apply_async.call_args[1]['args'][-5] == token
+    assert mock_har.apply_async.call_args[1]['args'][-6] == token
     assert 'overwrite_from_index_token' not in rv_json
     assert token not in json.dumps(rv_json)
     assert token not in mock_har.apply_async.call_args[1]['argsrepr']
@@ -1145,8 +1145,8 @@ def test_remove_operator_overwrite_token_redacted(mock_smfsc, mock_hrr, app, aut
     assert rv.status_code == 201
     mock_hrr.apply_async.assert_called_once()
     # Third to last element in args is the overwrite_from_index parameter
-    assert mock_hrr.apply_async.call_args[1]['args'][-4] is True
-    assert mock_hrr.apply_async.call_args[1]['args'][-3] == token
+    assert mock_hrr.apply_async.call_args[1]['args'][-5] is True
+    assert mock_hrr.apply_async.call_args[1]['args'][-4] == token
     assert 'overwrite_from_index_token' not in rv_json
     assert token not in json.dumps(rv_json)
     assert token not in mock_hrr.apply_async.call_args[1]['argsrepr']
@@ -1465,12 +1465,13 @@ def test_add_rm_batch_success(mock_smfnbor, mock_hrr, mock_har, app, auth_env, c
                     None,
                     {},
                     [],
+                    [],
                 ],
                 argsrepr=(
                     "[['registry-proxy/rh-osbs/lgallett-bundle:v1.0-9'], "
                     "1, 'registry-proxy/rh-osbs/openshift-ose-operator-registry:v4.5', "
                     "'registry-proxy/rh-osbs-stage/iib:v4.5', ['amd64'], '*****', "
-                    "'hello-operator', None, True, '*****', None, None, {}, []]"
+                    "'hello-operator', None, True, '*****', None, None, {}, [], []]"
                 ),
                 link_error=mock.ANY,
                 queue=None,
@@ -1490,11 +1491,12 @@ def test_add_rm_batch_success(mock_smfnbor, mock_hrr, mock_har, app, auth_env, c
                     None,
                     None,
                     {},
+                    [],
                 ],
                 argsrepr=(
                     "[['kiali-ossm'], 2, 'registry:8443/iib-build:11', "
                     "'registry-proxy/rh-osbs/openshift-ose-operator-registry:v4.5'"
-                    ", None, None, None, None, {}]"
+                    ", None, None, None, None, {}, []]"
                 ),
                 link_error=mock.ANY,
                 queue=None,
