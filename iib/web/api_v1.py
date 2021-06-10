@@ -694,6 +694,7 @@ def merge_index_image():
         payload.get('overwrite_target_index_token'),
         request.distribution_scope,
         flask.current_app.config['IIB_BINARY_IMAGE_CONFIG'],
+        payload.get('build_tags', []),
     ]
     safe_args = _get_safe_args(args, payload)
 
