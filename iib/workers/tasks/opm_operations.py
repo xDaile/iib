@@ -4,7 +4,9 @@ import shutil
 import socket
 import subprocess
 import time
+from typing import Tuple, List, Optional
 
+import typing as typing
 from retry import retry
 
 from iib.exceptions import AddressAlreadyInUse, IIBError
@@ -15,7 +17,7 @@ from iib.workers.tasks.fbc_utils import is_image_fbc, get_catalog_dir, get_hidde
 log = logging.getLogger(__name__)
 
 
-def _get_free_port(port_start, port_end):
+def _get_free_port(port_start: int, port_end: int) -> int:
     """
     Return free port that is safe to use for opm command.
 
@@ -44,7 +46,7 @@ def _get_free_port(port_start, port_end):
     raise IIBError(err_msg)
 
 
-def _get_free_port_for_grpc():
+def _get_free_port_for_grpc() -> int:
     """Return free port for gRPC service from range set in IIB config."""
     log.debug('Finding free port for gRPC')
     conf = get_worker_config()
@@ -54,7 +56,7 @@ def _get_free_port_for_grpc():
     return _get_free_port(port_start, port_end)
 
 
-def opm_serve_from_index(base_dir, from_index):
+def opm_serve_from_index(base_dir: str, from_index: str) -> Tuple[int, subprocess.Popen]:
     """
     Locally start OPM registry service, which can be communicated with using gRPC queries.
 
@@ -72,13 +74,12 @@ def opm_serve_from_index(base_dir, from_index):
     if not is_image_fbc(from_index):
         db_path = _get_index_database(from_index, base_dir)
         return opm_registry_serve(db_path)
-
     catalog_dir = get_catalog_dir(from_index, base_dir)
     return opm_serve(catalog_dir)
 
 
 @retry(exceptions=AddressAlreadyInUse, tries=get_worker_config().iib_grpc_max_tries, logger=log)
-def opm_serve(catalog_dir):
+def opm_serve(catalog_dir: str) -> Tuple[int, subprocess.Popen]:
     """
     Locally start OPM service, which can be communicated with using gRPC queries.
 
@@ -101,7 +102,7 @@ def opm_serve(catalog_dir):
 
 
 @retry(exceptions=AddressAlreadyInUse, tries=get_worker_config().iib_grpc_max_tries, logger=log)
-def opm_registry_serve(db_path):
+def opm_registry_serve(db_path: str) -> Tuple[int, subprocess.Popen]:
     """
     Locally start OPM registry service, which can be communicated with using gRPC queries.
 
@@ -123,7 +124,7 @@ def opm_registry_serve(db_path):
     )
 
 
-def _serve_cmd_at_port_defaults(serve_cmd, cwd, port):
+def _serve_cmd_at_port_defaults(serve_cmd: List[str], cwd: str, port: int) -> subprocess.Popen:
     """
     Call `_serve_cmd_at_port()` with default values from IIB config.
 
@@ -131,6 +132,7 @@ def _serve_cmd_at_port_defaults(serve_cmd, cwd, port):
     :param str cwd: path to folder which should be set as current working directory.
     :param str int port: port to start the service on.
     """
+
     log.debug('Run _serve_cmd_at_port with default loaded from IIB config.')
     conf = get_worker_config()
     return _serve_cmd_at_port(
@@ -139,7 +141,7 @@ def _serve_cmd_at_port_defaults(serve_cmd, cwd, port):
 
 
 @retry(exceptions=IIBError, tries=2, logger=log)
-def _serve_cmd_at_port(serve_cmd, cwd, port, max_tries, wait_time):
+def _serve_cmd_at_port(serve_cmd: List[str], cwd: str, port: int, max_tries: int, wait_time: int) -> subprocess.Popen:
     """
     Start an opm service at a specified port.
 
@@ -171,10 +173,12 @@ def _serve_cmd_at_port(serve_cmd, cwd, port, max_tries, wait_time):
             ret = rpc_proc.poll()
             # process has terminated
             if ret is not None:
-                stderr = rpc_proc.stderr.read()
-                if 'address already in use' in stderr:
+                if rpc_proc.stderr is None:
+                    raise IIBError(f'Command "{" ".join(serve_cmd)}" has failed')
+                stderr_message = rpc_proc.stderr.read()
+                if 'address already in use' in stderr_message:
                     raise AddressAlreadyInUse(f'Port {port} is already used by a different service')
-                raise IIBError(f'Command "{" ".join(serve_cmd)}" has failed with error "{stderr}"')
+                raise IIBError(f'Command "{" ".join(serve_cmd)}" has failed with error "{stderr_message}"')
 
             # query the service to see if it has started
             try:
@@ -195,8 +199,11 @@ def _serve_cmd_at_port(serve_cmd, cwd, port, max_tries, wait_time):
 
 
 def _get_or_create_temp_index_db_file(
-    base_dir, from_index=None, overwrite_from_index_token=None, ignore_existing=False
-):
+        base_dir: str,
+        from_index: Optional[str] = None,
+        overwrite_from_index_token: Optional[str] = None,
+        ignore_existing: bool = False
+) -> str:
     """
     Get path to temp index.db used for opm registry commands.
 
@@ -237,7 +244,7 @@ def _get_or_create_temp_index_db_file(
     return index_db_file
 
 
-def opm_registry_deprecatetruncate(base_dir, index_db, bundles):
+def opm_registry_deprecatetruncate(base_dir: str, index_db: str, bundles: List[str]) -> None:
     """
     Deprecate bundles from index.db.
 
@@ -246,7 +253,6 @@ def opm_registry_deprecatetruncate(base_dir, index_db, bundles):
     :param list bundles: pull specifications of bundles to deprecate.
     """
     from iib.workers.tasks.utils import run_cmd
-
     log.debug(
         'Run opm registry deprecatetruncate on database %s and bundles %s',
         index_db,
@@ -267,7 +273,7 @@ def opm_registry_deprecatetruncate(base_dir, index_db, bundles):
     run_cmd(cmd, {'cwd': base_dir}, exc_msg=f'Failed to deprecate the bundles on {index_db}')
 
 
-def deprecate_bundles_fbc(bundles, base_dir, binary_image, from_index):
+def deprecate_bundles_fbc(bundles: List[str], base_dir: str, binary_image: str, from_index: str) -> None:
     """
     Deprecate the specified bundles from the FBC index image.
 
@@ -298,7 +304,7 @@ def deprecate_bundles_fbc(bundles, base_dir, binary_image, from_index):
     )
 
 
-def opm_migrate(index_db, base_dir):
+def opm_migrate(index_db: str, base_dir: str) -> str:
     """
     Migrate SQLite database to File-Based catalog using opm command.
 
@@ -324,7 +330,13 @@ def opm_migrate(index_db, base_dir):
     return fbc_dir_path
 
 
-def opm_generate_dockerfile(fbc_dir, base_dir, index_db, binary_image, dockerfile_name=None):
+def opm_generate_dockerfile(
+        fbc_dir: str,
+        base_dir: str,
+        index_db: str,
+        binary_image: str,
+        dockerfile_name: Optional[str] = None
+) -> str:
     """
     Generate Dockerfile using opm command and adding index.db to hidden location.
 
@@ -388,12 +400,12 @@ def opm_generate_dockerfile(fbc_dir, base_dir, index_db, binary_image, dockerfil
 
 @retry(exceptions=IIBError, tries=2, logger=log)
 def _opm_registry_add(
-    base_dir,
-    index_db,
-    bundles,
-    overwrite_csv=False,
-    container_tool=None,
-):
+    base_dir: str,
+    index_db: str,
+    bundles: List[str],
+    overwrite_csv: bool = False,
+    container_tool: Optional[str] = None,
+) -> None:
     """
     Add the input bundles to an operator index database.
 
@@ -441,14 +453,14 @@ def _opm_registry_add(
 
 @retry(exceptions=IIBError, tries=2, logger=log)
 def opm_registry_add_fbc(
-    base_dir,
-    bundles,
-    binary_image,
-    from_index=None,
-    overwrite_csv=False,
-    overwrite_from_index_token=None,
-    container_tool=None,
-):
+    base_dir: str,
+    bundles: List[str],
+    binary_image: str,
+    from_index: Optional[str] = None,
+    overwrite_csv: bool = False,
+    overwrite_from_index_token: Optional[str] = None,
+    container_tool: Optional[str] = None,
+) -> None:
     """
     Add the input bundles to an operator index.
 
@@ -495,7 +507,7 @@ def opm_registry_add_fbc(
     )
 
 
-def _opm_registry_rm(index_db_path, operators, base_dir):
+def _opm_registry_rm(index_db_path: str, operators: List[str], base_dir: str) -> None:
     """
     Generate and run the opm command to remove operator package from index db provided.
 
@@ -518,7 +530,7 @@ def _opm_registry_rm(index_db_path, operators, base_dir):
 
 
 @retry(exceptions=IIBError, tries=2, logger=log)
-def opm_registry_rm_fbc(base_dir, from_index, operators, binary_image):
+def opm_registry_rm_fbc(base_dir: str, from_index: str, operators: List[str], binary_image: str) -> None:
     """
     Remove operator/s from a File Based Catalog index image.
 
@@ -549,8 +561,13 @@ def opm_registry_rm_fbc(base_dir, from_index, operators, binary_image):
 
 
 def opm_create_empty_fbc(
-    request_id, temp_dir, from_index_resolved, from_index, binary_image, operators
-):
+    request_id: int,
+    temp_dir: str,
+    from_index_resolved: str,
+    from_index: str,
+    binary_image: str,
+    operators: List[str]
+) -> None:
     """
     Create an empty FBC index image.
 

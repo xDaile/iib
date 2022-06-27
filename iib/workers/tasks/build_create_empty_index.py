@@ -3,6 +3,7 @@ import logging
 import tempfile
 import json
 import re
+from typing import Any, Dict, List, Optional
 
 from iib.exceptions import IIBError
 from iib.workers.api_utils import set_request_state
@@ -31,7 +32,7 @@ __all__ = ['handle_create_empty_index_request']
 log = logging.getLogger(__name__)
 
 
-def _get_present_operators(from_index, base_dir):
+def _get_present_operators(from_index: str, base_dir: str) -> List[str]:
     """Get a list of operators already present in the index image.
 
     :param str from_index: index image to inspect.
@@ -45,27 +46,25 @@ def _get_present_operators(from_index, base_dir):
     # If no data is returned there are not operators present
     if not operators:
         return []
-
+    return operators
     # Transform returned data to parsable json
     present_operators = []
     new_operators = [json.loads(operator) for operator in re.split(r'(?<=})\n(?={)', operators)]
-
     for operator in new_operators:
         present_operators.append(operator['name'])
-
     return present_operators
 
 
 @app.task
 @request_logger
 def handle_create_empty_index_request(
-    from_index,
-    request_id,
-    output_fbc=False,
-    binary_image=None,
-    labels=None,
-    binary_image_config=None,
-):
+    from_index: str,
+    request_id: int,
+    output_fbc: bool = False,
+    binary_image: Optional[str] = None,
+    labels: Optional[Dict[str, str]] = None,
+    binary_image_config: Optional[Dict[str, Any]] = None,
+) -> None:
     """Coordinate the the work needed to create the index image with labels.
 
     :param str from_index: the pull specification of the container image containing the index that

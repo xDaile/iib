@@ -4,6 +4,7 @@ import logging
 import os
 import stat
 import tempfile
+from typing import List, Tuple, Optional, Dict, Any
 
 from iib.workers.config import get_worker_config
 from iib.workers.tasks.opm_operations import (
@@ -49,17 +50,17 @@ log = logging.getLogger(__name__)
 
 
 def _add_bundles_missing_in_source(
-    source_index_bundles,
-    target_index_bundles,
-    base_dir,
-    binary_image,
-    source_from_index,
-    request_id,
-    arch,
-    ocp_version,
-    overwrite_target_index_token=None,
-    distribution_scope=None,
-):
+    source_index_bundles: List[Dict[str, Any]],
+    target_index_bundles: List[Dict[str, Any]],
+    base_dir: str,
+    binary_image: str,
+    source_from_index: str,
+    request_id: int,
+    arch: str,
+    ocp_version: str,
+    overwrite_target_index_token: Optional[str] = None,
+    distribution_scope: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Rebuild index image with bundles missing from source image but present in target image.
 
@@ -92,7 +93,6 @@ def _add_bundles_missing_in_source(
     source_bundle_digests = []
     source_bundle_csv_names = []
     target_bundle_digests = []
-
     for bundle in source_index_bundles:
         if '@sha256:' in bundle['bundlePath']:
             source_bundle_digests.append(bundle['bundlePath'].split('@sha256:')[-1])
@@ -151,6 +151,7 @@ def _add_bundles_missing_in_source(
     _add_label_to_index(
         'com.redhat.index.delivery.version', ocp_version, base_dir, 'index.Dockerfile'
     )
+
     _add_label_to_index(
         'com.redhat.index.delivery.distribution_scope',
         distribution_scope,
@@ -161,23 +162,23 @@ def _add_bundles_missing_in_source(
     _push_image(request_id, arch)
     log.info('New index image created')
 
-    return (missing_bundles, invalid_bundles)
+    return missing_bundles, invalid_bundles
 
 
 @app.task
 @request_logger
 def handle_merge_request(
-    source_from_index,
-    deprecation_list,
-    request_id,
-    binary_image=None,
-    target_index=None,
-    overwrite_target_index=False,
-    overwrite_target_index_token=None,
-    distribution_scope=None,
-    binary_image_config=None,
-    build_tags=None,
-):
+    source_from_index: str,
+    deprecation_list: List[str],
+    request_id: int,
+    binary_image: Optional[str] = None,
+    target_index: Optional[str] = None,
+    overwrite_target_index: bool = False,
+    overwrite_target_index_token: Optional[str] = None,
+    distribution_scope: Optional[str] = None,
+    binary_image_config: Optional[str] = None,
+    build_tags : Optional[List[str]] = None,
+) -> None:
     """
     Coordinate the work needed to merge old (N) index image with new (N+1) index image.
 
@@ -241,7 +242,7 @@ def handle_merge_request(
                 source_from_index_resolved, temp_dir
             )
 
-            target_index_bundles = []
+            target_index_bundles : List[Dict[str, str]] = []
             if target_index:
                 log.info('Getting bundles present in the target index image')
                 target_index_bundles, _ = _get_present_bundles(target_index_resolved, temp_dir)
@@ -372,7 +373,7 @@ def handle_merge_request(
     )
 
 
-def is_bundle_version_valid(bundle_path, valid_ocp_version):
+def is_bundle_version_valid(bundle_path: str, valid_ocp_version: str) -> bool:
     """
     Check if the version label of the bundle satisfies the index ocp_version.
 
@@ -397,6 +398,8 @@ def is_bundle_version_valid(bundle_path, valid_ocp_version):
         raise IIBError(f'Invalid OCP version, "{valid_ocp_version}", specified in Index Image')
     try:
         bundle_version_label = get_image_label(bundle_path, 'com.redhat.openshift.versions')
+        if bundle_version_label is None:
+            raise ValueError
         bundle_version = bundle_version_label.replace('v', '')
         log.debug(f'Bundle version {bundle_version}, Index image version {valid_ocp_version}')
         if bundle_version_label.startswith('='):

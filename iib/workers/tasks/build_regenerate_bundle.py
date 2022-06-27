@@ -4,8 +4,9 @@ import logging
 import os
 import tempfile
 import textwrap
+from typing import Any, Dict, Tuple, List, Optional, Set, Union, Sequence
 
-from operator_manifest.operator import ImageName, OperatorManifest
+from operator_manifest.operator import ImageName, OperatorManifest, OperatorCSV
 import ruamel.yaml
 
 from iib.exceptions import IIBError
@@ -49,7 +50,7 @@ log = logging.getLogger(__name__)
 @app.task
 @request_logger
 def handle_regenerate_bundle_request(
-    from_bundle_image, organization, request_id, registry_auths=None
+    from_bundle_image: str, organization: str, request_id: int, registry_auths: Optional[Dict[str, Any]] = None
 ):
     """
     Coordinate the work needed to regenerate the operator bundle image.
@@ -68,7 +69,7 @@ def handle_regenerate_bundle_request(
     with set_registry_auths(registry_auths):
         from_bundle_image_resolved = get_resolved_image(from_bundle_image)
 
-        arches = get_image_arches(from_bundle_image_resolved)
+        arches: Set[str] = get_image_arches(from_bundle_image_resolved)
         if not arches:
             raise IIBError(
                 'No arches were found in the resolved from_bundle_image '
@@ -82,7 +83,7 @@ def handle_regenerate_bundle_request(
         arches_str = ', '.join(sorted(arches))
         log.debug('Set to regenerate the bundle image for the following arches: %s', arches_str)
 
-        payload = {
+        payload: Dict[str, Any] = {
             'from_bundle_image_resolved': from_bundle_image_resolved,
             'state': 'in_progress',
             'state_reason': f'Regenerating the bundle image for the following arches: {arches_str}',
@@ -143,7 +144,7 @@ def handle_regenerate_bundle_request(
     update_request(request_id, payload, exc_msg='Failed setting the bundle image on the request')
 
 
-def _apply_package_name_suffix(metadata_path, package_name_suffix):
+def _apply_package_name_suffix(metadata_path: str, package_name_suffix: str) -> Tuple[str, Dict[str, str]]:
     """
     Add the package name suffix if configured for this organization.
 
@@ -185,8 +186,8 @@ def _apply_package_name_suffix(metadata_path, package_name_suffix):
 
 
 def _adjust_operator_bundle(
-    manifests_path, metadata_path, request_id, organization=None, pinned_by_iib=False
-):
+    manifests_path: str, metadata_path: str, request_id: int, organization: Optional[str] = None, pinned_by_iib: bool = False
+) -> Dict[str, str]:
     """
     Apply modifications to the operator manifests at the given location.
 
@@ -235,7 +236,7 @@ def _adjust_operator_bundle(
     package_name = annotations_yaml['annotations'][
         'operators.operatorframework.io.bundle.package.v1'
     ]
-    labels = {}
+    labels: Dict[str, str] = {}
 
     # Perform the customizations in order
     for customization in organization_customizations:
@@ -287,11 +288,10 @@ def _adjust_operator_bundle(
             log.info('Resolving image pull specs')
             bundle_metadata = _get_bundle_metadata(operator_manifest, pinned_by_iib)
             _resolve_image_pull_specs(bundle_metadata, labels, pinned_by_iib)
-
     return labels
 
 
-def _get_bundle_metadata(operator_manifest, pinned_by_iib):
+def _get_bundle_metadata(operator_manifest: OperatorManifest, pinned_by_iib: bool) -> Dict[str, Any]:
     """
     Get bundle metadata i.e. CSV's and all relatedImages pull specifications.
 
@@ -306,7 +306,7 @@ def _get_bundle_metadata(operator_manifest, pinned_by_iib):
     :return: a dictionary of CSV's and relatedImages pull specifications
     :rtype: dict
     """
-    bundle_metadata = {'found_pullspecs': set(), 'operator_csvs': []}
+    bundle_metadata: Dict[str, Any] = {'found_pullspecs': set(), 'operator_csvs': []}
     for operator_csv in operator_manifest.files:
         if pinned_by_iib:
             # If the bundle image has already been previously pinned by IIB, the relatedImages
@@ -325,7 +325,7 @@ def _get_bundle_metadata(operator_manifest, pinned_by_iib):
     return bundle_metadata
 
 
-def _get_package_annotations(metadata_path):
+def _get_package_annotations(metadata_path: str) -> Dict[str, Any]:
     """
     Get valid annotations yaml of the bundle.
 
@@ -360,7 +360,7 @@ def _get_package_annotations(metadata_path):
     return annotations_yaml
 
 
-def _resolve_image_pull_specs(bundle_metadata, labels, pinned_by_iib):
+def _resolve_image_pull_specs(bundle_metadata: Dict[str, Any], labels: Dict[str, str], pinned_by_iib: bool) -> None:
     """
     Resolve image pull specifications to container image digests.
 
@@ -391,12 +391,12 @@ def _resolve_image_pull_specs(bundle_metadata, labels, pinned_by_iib):
         _replace_csv_pullspecs(bundle_metadata, replacement_pullspecs)
 
 
-def _apply_registry_replacements(bundle_metadata, registry_replacements):
+def _apply_registry_replacements(bundle_metadata: Dict[str, Any], registry_replacements: Dict[str, Any]) -> None:
     """
     Apply registry replacements from the config customizations.
 
     :param dict bundle_metadata: the dictionary of CSV's and relatedImages pull specifications
-    :param str registry_replacements: the customization dictionary which specifies replacement of
+    :param dict registry_replacements: the customization dictionary which specifies replacement of
         registry in the pull specifications.
     """
     replacement_pullspecs = {}
@@ -412,7 +412,7 @@ def _apply_registry_replacements(bundle_metadata, registry_replacements):
         _replace_csv_pullspecs(bundle_metadata, replacement_pullspecs)
 
 
-def _replace_image_name_from_labels(bundle_metadata, replacement_template):
+def _replace_image_name_from_labels(bundle_metadata: Dict[str, Any], replacement_template: str) -> None:
     """
     Replace repo/image-name in the CSV pull specs with values from their labels.
 
@@ -434,7 +434,8 @@ def _replace_image_name_from_labels(bundle_metadata, replacement_template):
                 f' Available labels: {", ".join(list(pullspec_labels.keys()))}'
             )
 
-        namespace_repo_list = modified_namespace_repo.split('/', 1)
+        namespace_repo_list: List[Optional[str]] = []
+        namespace_repo_list.extend(modified_namespace_repo.split('/', 1))
         if len(namespace_repo_list) == 1:
             namespace_repo_list.insert(0, None)
 
@@ -445,7 +446,7 @@ def _replace_image_name_from_labels(bundle_metadata, replacement_template):
     _replace_csv_pullspecs(bundle_metadata, replacement_pullspecs)
 
 
-def _replace_csv_pullspecs(bundle_metadata, replacement_pullspecs):
+def _replace_csv_pullspecs(bundle_metadata: Dict[str, Any], replacement_pullspecs: Dict[str, Any]) -> None:
     """
     Replace pull specs in operator CSV files.
 
@@ -457,7 +458,7 @@ def _replace_csv_pullspecs(bundle_metadata, replacement_pullspecs):
     for old_pullspec, new_pullspec in replacement_pullspecs.items():
         log.debug(
             '%s will be replaced with %s in the bundle CSVs',
-            old_pullspec.to_str(),
+            old_pullspec.__repr__(),
             new_pullspec.to_str(),
         )
 
@@ -478,13 +479,17 @@ def _replace_csv_pullspecs(bundle_metadata, replacement_pullspecs):
         operator_csv.dump()
 
 
-def _adjust_csv_annotations(operator_csvs, package_name, org_csv_annotations):
+def _adjust_csv_annotations(
+        operator_csvs: List[OperatorCSV],
+        package_name: str,
+        org_csv_annotations: Dict[str, Any]
+) -> None:
     """
     Annotate ClusterServiceVersion objects based on an organization configuration.
 
     :param list operator_csvs: the list of ``OperatorCSV`` objects to examine.
     :param str package_name: the operator package name.
-    :param str org_csv_annotations: the dict of annotations customization for an organization.
+    :param dict org_csv_annotations: the dict of annotations customization for an organization.
     """
     for operator_csv in operator_csvs:
         log.debug(
@@ -498,7 +503,11 @@ def _adjust_csv_annotations(operator_csvs, package_name, org_csv_annotations):
         operator_csv.dump()
 
 
-def _apply_repo_enclosure(bundle_metadata, org_enclose_repo_namespace, org_enclose_repo_glue):
+def _apply_repo_enclosure(
+        bundle_metadata: Dict[str, Any],
+        org_enclose_repo_namespace: str,
+        org_enclose_repo_glue: str
+) -> None:
     """
     Apply repo_enclosure customization to the bundle image.
 
@@ -523,7 +532,7 @@ def _apply_repo_enclosure(bundle_metadata, org_enclose_repo_namespace, org_enclo
     _replace_csv_pullspecs(bundle_metadata, replacement_pullspecs)
 
 
-def _write_related_bundles_file(bundle_metadata, request_id):
+def _write_related_bundles_file(bundle_metadata: Dict[str, Any], request_id: int) -> None:
     """
     Get bundle images in the CSV files of the bundle being regenerated and store them in a file.
 

@@ -4,6 +4,7 @@ import json
 import logging
 
 import requests
+from typing import Any, Dict, List
 
 from iib.exceptions import IIBError
 from iib.workers.config import get_worker_config
@@ -13,7 +14,7 @@ log = logging.getLogger(__name__)
 
 
 # NOTE: The gating feature will be removed in the next release
-def gate_bundles(bundles, greenwave_config):
+def gate_bundles(bundles: List[str], greenwave_config: Dict[str, Any]) -> None:
     """
     Check if all bundle images have passed gating tests in the CVP pipeline.
 
@@ -80,7 +81,7 @@ def gate_bundles(bundles, greenwave_config):
         raise IIBError(error_msg)
 
 
-def _get_koji_build_nvr(bundle):
+def _get_koji_build_nvr(bundle: str) -> str:
     """
     Get the Koji build NVR of the bundle from its labels.
 
@@ -92,7 +93,7 @@ def _get_koji_build_nvr(bundle):
     return '{}-{}-{}'.format(labels['com.redhat.component'], labels['version'], labels['release'])
 
 
-def _validate_greenwave_params_and_config(conf, greenwave_config):
+def _validate_greenwave_params_and_config(conf: Dict[str, str], greenwave_config: Dict[str, Any]) -> None:
     """
     Validate payload parameters and config variables required for gating bundles.
 
