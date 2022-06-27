@@ -11,7 +11,7 @@ from iib.workers.tasks.utils import RequestConfigCreateIndexImage
 @mock.patch('iib.workers.tasks.build_create_empty_index.grpcurl_get_db_data')
 def test_get_present_operators(mock_grpcurl, tmpdir):
 
-    mock_grpcurl.side_effect = ['{\n"name": "package1"\n}\n{\n"name": "package2"\n}\n']
+    mock_grpcurl.side_effect = [['package1', 'package2']]
     operators = build_create_empty_index._get_present_operators(
         'quay.io/index-image:4.5', tmpdir.join("index.db")
     )

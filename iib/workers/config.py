@@ -2,6 +2,8 @@
 import os
 import logging
 import types
+from celery import Celery, app
+from typing import Any, Dict, Iterable, Optional, Union, Type
 
 from iib.exceptions import ConfigError
 
@@ -10,31 +12,31 @@ class Config(object):
     """The base IIB Celery configuration."""
 
     # When publishing a message, don't continuously retry or else the HTTP connection times out
-    broker_transport_options = {'max_retries': 10}
+    broker_transport_options: Dict[str, Any] = {'max_retries': 10}
     # Avoid infinite Celery retries when the broker is offline.
     broker_connection_max_retries: int = 10
-    iib_aws_s3_bucket_name = None
-    iib_api_timeout = 30
+    iib_aws_s3_bucket_name: Optional[str] = None
+    iib_api_timeout: int = 30
     iib_docker_config_template = os.path.join(
         os.path.expanduser('~'), '.docker', 'config.json.template'
     )
-    iib_greenwave_url = None
+    iib_greenwave_url: Optional[str] = None
     iib_grpc_init_wait_time = 30
     iib_grpc_max_port_tries = 100
     iib_grpc_max_tries = 5
     iib_grpc_start_port = 50051
     iib_image_push_template = '{registry}/iib-build:{request_id}'
-    iib_index_image_output_registry = None
+    iib_index_image_output_registry: Optional[str] = None
     iib_log_level = 'INFO'
-    iib_organization_customizations = {}
-    iib_request_logs_dir = None
+    iib_organization_customizations: Dict[str, Any] = {}
+    iib_request_logs_dir: Optional[str] = None
     iib_request_logs_format = (
         '%(asctime)s %(name)s %(processName)s {request_id} '
         '%(levelname)s %(module)s.%(funcName)s %(message)s'
     )
     iib_request_logs_level = 'DEBUG'
-    iib_required_labels = {}
-    iib_request_related_bundles_dir = None
+    iib_required_labels: Dict[str, Any] = {}
+    iib_request_related_bundles_dir: Optional[str] = None
     # Configuration for dogpile.cache
     # Disabled by default (by using 'dogpile.cache.null').
     # To enable caching set 'dogpile.cache.memcached' as backend.
@@ -138,8 +140,8 @@ class DevelopmentConfig(Config):
         ],
     }
     iib_registry = 'registry:8443'
-    iib_request_logs_dir = '/var/log/iib/requests'
-    iib_request_related_bundles_dir = '/var/lib/requests/related_bundles'
+    iib_request_logs_dir: Optional[str] = '/var/log/iib/requests'
+    iib_request_related_bundles_dir: Optional[str] = '/var/lib/requests/related_bundles'
     iib_dogpile_backend = 'dogpile.cache.memcached'
 
 
@@ -149,19 +151,19 @@ class TestingConfig(DevelopmentConfig):
     iib_docker_config_template = '/home/iib-worker/.docker/config.json.template'
     iib_greenwave_url = 'some_url'
     iib_omps_url = 'some_url'
-    iib_request_logs_dir = None
-    iib_request_related_bundles_dir = None
+    iib_request_logs_dir: Optional[str] = None
+    iib_request_related_bundles_dir: Optional[str] = None
     # disable dogpile cache for tests
     iib_dogpile_backend = 'dogpile.cache.null'
 
 
-def configure_celery(celery_app):
+def configure_celery(celery_app: Celery) -> None:
     """
     Configure the Celery application instance.
 
     :param celery.Celery celery: the Celery application instance to configure
     """
-    config = ProductionConfig
+    config: Type[Config] = ProductionConfig
     prod_config_file_path = os.getenv('IIB_CELERY_CONFIG', '/etc/iib/celery.py')
     if os.getenv('IIB_DEV', '').lower() == 'true':
         config = DevelopmentConfig
@@ -170,13 +172,14 @@ def configure_celery(celery_app):
     elif os.path.isfile(prod_config_file_path):
         # Celery doesn't support importing config files that aren't part of a Python path. This is
         # a hack taken from flask.config.from_pyfile.
-        _user_config = {}
+        _user_config: Dict[str, Any] = {}
         with open(prod_config_file_path, mode='rb') as config_file:
             exec(compile(config_file.read(), prod_config_file_path, 'exec'), _user_config)  # nosec
 
         # Celery doesn't support configuring from multiple objects, so this is a way for
         # the configuration in prod_config_file_path to override the defaults in ProductionConfig
-        config = ProductionConfig()
+        #TODO is there some difference between ProductionConfig() and ProductionConfig - try debug
+        config = ProductionConfig
         for key, value in _user_config.items():
             # The _user_config dictionary will contain the __builtins__ key, which we need to skip.
             # Additionally, if any modules were imported to define Celery queues, they will
@@ -188,7 +191,7 @@ def configure_celery(celery_app):
     logging.getLogger('iib.workers').setLevel(celery_app.conf.iib_log_level)
 
 
-def validate_celery_config(conf, **kwargs):
+def validate_celery_config(conf: app.utils.Settings, **kwargs) -> None:
     """
     Perform basic validatation on the Celery configuration when the worker is initialized.
 
@@ -238,7 +241,7 @@ def validate_celery_config(conf, **kwargs):
                 raise ConfigError(f'{directory}, is not writable!')
 
 
-def _validate_iib_org_customizations(iib_org_customizations):
+def _validate_iib_org_customizations(iib_org_customizations: Dict[str, Any]) -> None:
     """
     Validate ``iib_organization_customizations`` celery config variable.
 
@@ -256,7 +259,6 @@ def _validate_iib_org_customizations(iib_org_customizations):
         'image_name_from_labels': {'template'},
         'enclose_repo': {'enclosure_glue', 'namespace'},
     }
-
     for org, org_config in iib_org_customizations.items():
         if not isinstance(org, str):
             raise ConfigError('The org keys in iib_organization_customizations must be strings')
@@ -276,7 +278,6 @@ def _validate_iib_org_customizations(iib_org_customizations):
                 raise ConfigError(
                     f'Invalid customization in iib_organization_customizations {customization}'
                 )
-
             invalid_customization_keys = (
                 customization.keys() - valid_customizations[customization_type] - {'type'}
             )
@@ -317,9 +318,8 @@ def _validate_iib_org_customizations(iib_org_customizations):
                         )
 
 
-def get_worker_config():
-    """Return the Celery configuration."""
+def get_worker_config() -> app.utils.Settings:
+    """ Return the Celery configuration."""
     # Import this here to avoid a circular import
     import iib.workers.tasks.celery
-
     return iib.workers.tasks.celery.app.conf

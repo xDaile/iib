@@ -6,6 +6,7 @@ import tempfile
 
 from operator_manifest.operator import ImageName
 from retry import retry
+from typing import Any, Dict, Iterable, List, Set, Optional, Tuple
 
 from iib.exceptions import IIBError, ExternalServiceError
 from iib.workers.api_utils import set_request_state, update_request
@@ -98,7 +99,7 @@ def _build_image(dockerfile_dir: str, dockerfile_name: str, request_id: int, arc
     )
 
 
-def _cleanup():
+def _cleanup() -> None:
     """
     Remove all existing container images on the host.
 
@@ -119,7 +120,7 @@ def _cleanup():
 
 
 @retry(exceptions=IIBError, tries=get_worker_config().iib_total_attempts, logger=log)
-def _create_and_push_manifest_list(request_id, arches, build_tags):
+def _create_and_push_manifest_list(request_id: int, arches: Iterable, build_tags: Optional[List[str]]) -> str:
     """
     Create and push the manifest list to the configured registry.
 
@@ -131,9 +132,9 @@ def _create_and_push_manifest_list(request_id, arches, build_tags):
     :raises IIBError: if creating or pushing the manifest list fails
     """
     buildah_manifest_cmd = ['buildah', 'manifest']
-    _tags = [request_id]
+    _tags = [str(request_id)]
     if build_tags:
-        _tags += build_tags
+        _tags.extend(build_tags)
     conf = get_worker_config()
     output_pull_specs = []
     for tag in _tags:
@@ -187,15 +188,15 @@ def _create_and_push_manifest_list(request_id, arches, build_tags):
 
 
 def _update_index_image_pull_spec(
-    output_pull_spec,
-    request_id,
-    arches,
-    from_index=None,
-    overwrite_from_index=False,
-    overwrite_from_index_token=None,
-    resolved_prebuild_from_index=None,
-    add_or_rm=False,
-):
+    output_pull_spec: str,
+    request_id: int,
+    arches: Set[str],
+    from_index: Optional[str] = None,
+    overwrite_from_index: bool = False,
+    overwrite_from_index_token: Optional[str] = None,
+    resolved_prebuild_from_index: Optional[str] = None,
+    add_or_rm: bool = False,
+) -> None:
     """
     Update the request with the modified index image.
 
@@ -216,7 +217,7 @@ def _update_index_image_pull_spec(
     :raises IIBError: if the manifest list couldn't be created and pushed
     """
     conf = get_worker_config()
-    if from_index and overwrite_from_index:
+    if from_index and overwrite_from_index and resolved_prebuild_from_index:
         _overwrite_from_index(
             request_id,
             output_pull_spec,
@@ -236,7 +237,6 @@ def _update_index_image_pull_spec(
         )
     else:
         index_image = output_pull_spec
-
     payload = {'arches': list(arches), 'index_image': index_image}
 
     if add_or_rm:
@@ -249,7 +249,7 @@ def _update_index_image_pull_spec(
     update_request(request_id, payload, exc_msg='Failed setting the index image on the request')
 
 
-def _get_external_arch_pull_spec(request_id, arch, include_transport=False):
+def _get_external_arch_pull_spec(request_id: int, arch: str, include_transport: bool = False) -> str:
     """
     Get the pull specification of the single arch image in the external registry.
 
@@ -266,7 +266,7 @@ def _get_external_arch_pull_spec(request_id, arch, include_transport=False):
     return pull_spec
 
 
-def _get_local_pull_spec(request_id, arch, include_transport=False):
+def _get_local_pull_spec(request_id: int, arch: str, include_transport: bool = False) -> str:
     """
     Get the local pull specification of the architecture specfic index image for this request.
 
@@ -283,7 +283,7 @@ def _get_local_pull_spec(request_id, arch, include_transport=False):
     return pull_spec
 
 
-def get_rebuilt_image_pull_spec(request_id):
+def get_rebuilt_image_pull_spec(request_id: int) -> str:
     """
     Generate the pull specification of the container image rebuilt by IIB.
 
@@ -297,7 +297,7 @@ def get_rebuilt_image_pull_spec(request_id):
     )
 
 
-def _get_index_database(from_index, base_dir):
+def _get_index_database(from_index: str, base_dir: str) -> str:
     """
     Get database file from the specified index image and save it locally.
 
@@ -315,7 +315,7 @@ def _get_index_database(from_index, base_dir):
     return local_path
 
 
-def _get_present_bundles(from_index, base_dir):
+def _get_present_bundles(from_index: str, base_dir: str) -> Tuple[List[Dict[str, str]], List[str]]:
     """
     Get a list of bundles already present in the index image.
 
@@ -349,11 +349,10 @@ def _get_present_bundles(from_index, base_dir):
             continue
         unique_present_bundles.append(bundle)
         unique_present_bundles_pull_spec.append(bundle_path)
-
     return unique_present_bundles, unique_present_bundles_pull_spec
 
 
-def _get_missing_bundles(present_bundles, bundles):
+def _get_missing_bundles(present_bundles: List[Dict[str, Any]], bundles: List[str]) -> List[str]:
     """
     Filter out bundles to only those not present in the index image.
 
@@ -371,20 +370,19 @@ def _get_missing_bundles(present_bundles, bundles):
     for bundle in bundles:
         if bundle.split('@sha256:')[-1] not in present_bundle_hashes:
             filtered_bundles.append(bundle)
-
     return filtered_bundles
 
 
 @retry(exceptions=IIBError, tries=2, logger=log)
 def _opm_index_add(
-    base_dir,
-    bundles,
-    binary_image,
-    from_index=None,
-    overwrite_from_index_token=None,
-    overwrite_csv=False,
-    container_tool=None,
-):
+    base_dir: str,
+    bundles: List[str],
+    binary_image: str,
+    from_index: Optional[str] = None,
+    overwrite_from_index_token: Optional[str] = None,
+    overwrite_csv: bool = False,
+    container_tool: Optional[str] = None,
+) -> None:
     """
     Add the input bundles to an operator index.
 
@@ -441,7 +439,13 @@ def _opm_index_add(
 
 
 @retry(exceptions=IIBError, tries=2, logger=log)
-def _opm_index_rm(base_dir, operators, binary_image, from_index, overwrite_from_index_token=None):
+def _opm_index_rm(
+        base_dir: str,
+        operators: List[str],
+        binary_image: str,
+        from_index: str,
+        overwrite_from_index_token: str = None
+) -> None:
     """
     Remove the input operators from the operator index.
 
@@ -484,12 +488,12 @@ def _opm_index_rm(base_dir, operators, binary_image, from_index, overwrite_from_
 
 
 def _overwrite_from_index(
-    request_id,
-    output_pull_spec,
-    from_index,
-    resolved_prebuild_from_index,
-    overwrite_from_index_token=None,
-):
+    request_id: int,
+    output_pull_spec: str,
+    from_index: str,
+    resolved_prebuild_from_index: str,
+    overwrite_from_index_token: Optional[str] = None,
+) -> None:
     """
     Overwrite the ``from_index`` image.
 
@@ -547,7 +551,7 @@ def _overwrite_from_index(
             temp_dir.cleanup()
 
 
-def _update_index_image_build_state(request_id, prebuild_info):
+def _update_index_image_build_state(request_id: int, prebuild_info: Dict[str, Any]) -> None:
     """
     Update the build request state with pre-determined build information.
 
@@ -590,7 +594,7 @@ def _update_index_image_build_state(request_id, prebuild_info):
 
 
 @retry(exceptions=IIBError, tries=get_worker_config().iib_total_attempts, logger=log)
-def _push_image(request_id, arch):
+def _push_image(request_id: int, arch: str) -> None:
     """
     Push the single arch container image to the configured registry.
 
@@ -617,9 +621,8 @@ def _push_image(request_id, arch):
         exc_msg = f'Failed to fix the manifest schema version on {destination}'
         _skopeo_copy(destination, destination, exc_msg=exc_msg)
 
-
 @retry(exceptions=IIBError, tries=get_worker_config().iib_total_attempts, logger=log)
-def _skopeo_copy(source, destination, copy_all=False, exc_msg=None):
+def _skopeo_copy(source: str, destination: str, copy_all: bool = False, exc_msg: Optional[str] = None) -> None:
     """
     Wrap the ``skopeo copy`` command.
 
@@ -640,8 +643,8 @@ def _skopeo_copy(source, destination, copy_all=False, exc_msg=None):
 
 
 def _verify_index_image(
-    resolved_prebuild_from_index, unresolved_from_index, overwrite_from_index_token=None
-):
+    resolved_prebuild_from_index: str, unresolved_from_index: str, overwrite_from_index_token: str = None
+) -> None:
     """
     Verify if the index image has changed since the IIB build request started.
 
@@ -665,22 +668,22 @@ def _verify_index_image(
 @app.task
 @request_logger
 def handle_add_request(
-    bundles,
-    request_id,
-    binary_image=None,
-    from_index=None,
-    add_arches=None,
-    cnr_token=None,
-    organization=None,
-    force_backport=False,
-    overwrite_from_index=False,
-    overwrite_from_index_token=None,
-    distribution_scope=None,
-    greenwave_config=None,
-    binary_image_config=None,
-    deprecation_list=None,
-    build_tags=None,
-):
+    bundles: List[str],
+    request_id: int,
+    binary_image: Optional[str] = None,
+    from_index: Optional[str] = None,
+    add_arches: Optional[List[str]] = None,
+    cnr_token: Optional[str] = None,
+    organization: Optional[str] = None,
+    force_backport: bool = False,
+    overwrite_from_index: bool = False,
+    overwrite_from_index_token: Optional[str] = None,
+    distribution_scope: Optional[str] = None,
+    greenwave_config: Optional[Dict[str, Any]] = None,
+    binary_image_config: Optional[Dict[str, Any]] = None,
+    deprecation_list: Optional[List[str]] = None,
+    build_tags: Optional[List[str]] = None,
+) -> None:
     """
     Coordinate the the work needed to build the index image with the input bundles.
 
@@ -755,8 +758,8 @@ def handle_add_request(
         )
 
     _update_index_image_build_state(request_id, prebuild_info)
-    present_bundles = []
-    present_bundles_pull_spec = []
+    present_bundles: List[Dict[str, Any]] = []
+    present_bundles_pull_spec: List[str] = []
     with tempfile.TemporaryDirectory(prefix='iib-') as temp_dir:
         if from_index:
             msg = 'Checking if bundles are already present in index image'
@@ -892,17 +895,17 @@ def handle_add_request(
 @app.task
 @request_logger
 def handle_rm_request(
-    operators,
-    request_id,
-    from_index,
-    binary_image=None,
-    add_arches=None,
-    overwrite_from_index=False,
-    overwrite_from_index_token=None,
-    distribution_scope=None,
-    binary_image_config=None,
-    build_tags=None,
-):
+    operators: List[str],
+    request_id: int,
+    from_index: str,
+    binary_image: Optional[str] = None,
+    add_arches: Optional[List[str]] = None,
+    overwrite_from_index: bool = False,
+    overwrite_from_index_token: Optional[str] = None,
+    distribution_scope: Optional[str] = None,
+    binary_image_config: Optional[Dict[str, Any]] = None,
+    build_tags: Optional[List[str]] = None,
+) -> None:
     """
     Coordinate the work needed to remove the input operators and rebuild the index image.
 
@@ -984,7 +987,6 @@ def handle_rm_request(
 
     set_request_state(request_id, 'in_progress', 'Creating the manifest list')
     output_pull_spec = _create_and_push_manifest_list(request_id, arches, build_tags)
-
     _update_index_image_pull_spec(
         output_pull_spec,
         request_id,
@@ -1000,7 +1002,7 @@ def handle_rm_request(
     )
 
 
-def _copy_files_from_image(image, src_path, dest_path):
+def _copy_files_from_image(image: str, src_path: str, dest_path: str) -> None:
     """
     Copy a file from the container image into the given destination path.
 
@@ -1039,7 +1041,7 @@ def _copy_files_from_image(image, src_path, dest_path):
             log.exception(e)
 
 
-def _add_label_to_index(label_key, label_value, temp_dir, dockerfile_name):
+def _add_label_to_index(label_key: str, label_value: str, temp_dir: str, dockerfile_name: str):
     """
     Add the OCP delivery label to the provided dockerfile.
 

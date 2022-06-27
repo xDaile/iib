@@ -5,13 +5,15 @@ import logging
 import requests
 from requests.packages.urllib3.util.retry import Retry
 import requests_kerberos
+from typing import Any, Dict, Optional
+
 
 from iib.exceptions import IIBError
 
 log = logging.getLogger(__name__)
 
 
-def get_requests_session(auth=False):
+def get_requests_session(auth: bool = False) -> requests.Session:
     """
     Create a requests session with authentication (when enabled).
 
@@ -33,7 +35,7 @@ def get_requests_session(auth=False):
     return session
 
 
-def get_request(request_id):
+def get_request(request_id: int) -> Dict[str, Any]:
     """
     Get the IIB build request from the REST API.
 
@@ -68,7 +70,7 @@ def get_request(request_id):
     return rv.json()
 
 
-def set_request_state(request_id, state, state_reason):
+def set_request_state(request_id: int, state: str, state_reason: str) -> Dict[str, Any]:
     """
     Set the state of the request using the IIB API.
 
@@ -90,7 +92,7 @@ def set_request_state(request_id, state, state_reason):
     return update_request(request_id, payload, exc_msg=exc_msg)
 
 
-def set_omps_operator_version(request_id, omps_operator_version):
+def set_omps_operator_version(request_id: int, omps_operator_version: Dict[str, Any]) -> Dict[str, Any]:
     """
     Set the set_omps_operator_version of the request using the IIB API.
 
@@ -112,7 +114,7 @@ def set_omps_operator_version(request_id, omps_operator_version):
     return update_request(request_id, payload, exc_msg=exc_msg)
 
 
-def update_request(request_id, payload, exc_msg=None):
+def update_request(request_id: int, payload: Dict[str, Any], exc_msg: Optional[str] = None) -> Dict[str, Any]:
     """
     Update the IIB build request.
 
