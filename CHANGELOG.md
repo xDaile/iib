@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 
+## 8.7.6
+* Fix opm lock by @xDaile in https://github.com/xDaile/iib/pull/8
+
 ## 8.7.5
 * Fix buildah retry mechanism by @xDaile in https://github.com/release-engineering/iib/pull/681
 * Allow non tagged index image in IIB_GRAPH_MODE_INDEX_ALLOW_LIST by @xDaile in https://github.com/release-engineering/iib/pull/661
