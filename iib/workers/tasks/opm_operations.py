@@ -1,10 +1,15 @@
+from functools import wraps
 import logging
 import os
 import random
+import re
 import shutil
+import socket
 import subprocess
+import tempfile
 import time
-from typing import List, Optional, Tuple, Generator, Union
+from typing import Callable, Generator, List, Optional, Set, Tuple, Union
+from packaging.version import Version
 
 from tenacity import (
     before_sleep_log,
@@ -26,29 +31,234 @@ from iib.workers.tasks.fbc_utils import (
 log = logging.getLogger(__name__)
 
 
-def _gen_port_for_grpc() -> Generator[int, None, None]:
-    """
-    Generate port for gRPC service from range set in IIB config.
+class PortFileLock:
+    """A class representing file-lock used during OPM operations."""
 
+    def __init__(self, purpose: str, port: int):
+        """
+        Initialize the PortFileLock object.
+
+        :param str purpose: Purpose of the lock
+        :param int port: The port number to be locked
+        """
+        self.purpose = purpose
+        self.port = port
+        self.locked = False
+        self.filename = os.path.join(
+            tempfile.gettempdir(),
+            f'iib_{purpose}_{port}.lock',
+        )
+
+    def __repr__(self):
+        """
+        Return string representation of the PortFileLock Object.
+
+        :return: String representation of the PortFileLock Object
+        :rtype: str
+        """
+        return f"PortFileLock(port: {self.port}, purpose: {self.purpose}, locked: {self.locked})"
+
+    def lock_acquire(self):
+        """
+        Create a file representing port lock.
+
+        Before trying to create a a port-lock file, we try to check if the port is free.
+        """
+        log.debug("Attempt to lock port %s.", self.port)
+
+        if self.locked:
+            err_msg = f"Error: Port {self.port} is already locked"
+            log.exception(err_msg)
+            raise IIBError(err_msg)
+
+        # check if the port is free, opm service is doing the check too,
+        # however this way, we do not have to rely on their error message format
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        f = None
+        try:
+            # test if port is free
+            s.bind(("localhost", self.port))
+            # create file-lock
+            f = os.open(self.filename, os.O_CREAT | os.O_EXCL)
+            self.locked = True
+            log.debug("Port %s used as %s was locked.", self.port, self.purpose)
+        except FileExistsError:
+            err_msg = f"Port {self.port} is already locked by other IIB worker."
+            log.exception(err_msg)
+            raise AddressAlreadyInUse(err_msg)
+        except socket.error:
+            err_msg = f"Port {self.port} is already in use."
+            log.exception(err_msg)
+            raise AddressAlreadyInUse(err_msg)
+        finally:
+            s.close()
+            if f:
+                os.close(f)
+
+    def unlock(self):
+        """Delete file representing port lock."""
+        if self.locked:
+            os.remove(self.filename)
+            self.locked = False
+            log.debug('Port %s used as %s was unlocked.', self.port, self.purpose)
+        else:
+            err_msg = f"Attempt to unlock not-locked {self}."
+            log.exception(err_msg)
+            raise IIBError(err_msg)
+
+
+def port_file_locks_generator(
+    port_stacks: List[List[int]],
+    port_purposes: List[str],
+) -> Generator[List[PortFileLock], None, None]:
+    """
+    Generate PortFileLock from port_stacks and port_purposes.
+
+    Each item in the port_stacks list represents set of ports, from which list of PortFileLocks
+    will be generated.
+
+    :param list(list(int)) port_stacks: list with list of port numbers for one generated item
+    :param list(str) port_purposes: Strings representing port purposes
+    :return: Generator which yields list of PortFileLocks objects
+    :rtype: Generator(list(PortFileLock))
     :raises: IIBError when all ports were already taken
     """
-    conf = get_worker_config()
-    port_start = conf['iib_grpc_start_port']
-    port_end = port_start + conf['iib_grpc_max_port_tries']
+    num_of_attempts = len(port_stacks)
 
-    port_stack = list(range(port_start, port_end))
-    random.shuffle(port_stack)
-
-    log.debug('Get random ports from range [%d, %d)', port_start, port_end)
-
-    while port_stack:
-        yield port_stack.pop(0)
+    # create port_lock_here
+    while port_stacks:
+        port_numbers = port_stacks.pop(0)
+        new_locks = [
+            PortFileLock(
+                purpose=port_purpose,
+                port=port_numbers[port_position],
+            )
+            for port_position, port_purpose in enumerate(port_purposes)
+        ]
+        yield new_locks
 
     # The port stack is empty - we tried out all ports from allowed range
     # therefore we will raise and IIB error
-    err_msg = f'No free port has been found after {port_end - port_start} attempts.'
+    err_msg = f'No free port has been found after {num_of_attempts} attempts.'
     log.error(err_msg)
     raise IIBError(err_msg)
+
+
+def get_opm_port_stacks(port_purposes: List[str]) -> Tuple[List[List[int]], List[str]]:
+    """
+    Get stack with port numbers and list of their intended purposes.
+
+    This stack of ports is used later in the Generator of the port numbers.
+
+    This function returns a tuple consisting of two elements:
+    1. list(list(int)): Each inner list represents a set of port numbers used in a single attempt
+    of running the OPM command. Used port numbers are retrieved from the config iib_opm_port_ranges
+    values.
+    2. list(str): Each string describes the intended purpose of the port number, with the position
+    of each string corresponding to the ports in the inner items in the first list.
+    This list is constructed from the config iib_opm_port_ranges keys.
+
+    Example:
+        ports, purposes = get_opm_port_stacks()
+        ports contains: [[50051, 50151], [50052, 50152]]
+        purposes content: ['opm_port', 'opm_pprof_port']
+
+    In this example, ports 50051 and 50052 are port intended to use as 'opm_port' and ports 50151
+    and 50152 as 'opm_pprof_port'.
+
+    :param list(str) port_purposes: list with port intended purposes
+    :return: tuple with port stacks and their purposes
+    :rtype: tuple(list(list(int)), list(str))
+    """
+    conf = get_worker_config()
+
+    opm_version = Opm.get_opm_version_number()
+    if Version(opm_version) < Version(conf.iib_opm_pprof_lock_required_min_version):
+        port_purposes.remove('opm_pprof_port')
+
+    # get port_ranges we need for the give opm_version
+    port_ranges = [range(*conf.iib_opm_port_ranges[port_purpose]) for port_purpose in port_purposes]
+
+    ports_list = list(map(list, zip(*port_ranges)))
+
+    # shuffles the order, port pairs remain
+    random.shuffle(ports_list)
+
+    return ports_list, port_purposes
+
+
+def create_port_filelocks(port_purposes: List[str]) -> Callable:
+    """
+    Create a file-lock on random port from the configured range.
+
+    :param List[str] port_purposes: the list of port purposes to be locked
+    :rtype: Callable
+    :return: the decorator function
+    """
+
+    def decorator(func: Callable) -> Callable:
+        """
+        Create a file-lock on random port from the configured range.
+
+        :param function func: the function to be decorated
+        :rtype: function
+        :return: the decorated function
+        """
+
+        @wraps(func)
+        def inner(*args, **kwargs):
+
+            # If we do not have any ports to lock
+            if len(port_purposes) == 0:
+                return func(*args, **kwargs)
+
+            port_stacks, port_purposes_updated = get_opm_port_stacks(port_purposes)
+            # Attempt to acquire the lock for each port in the range (shuffled order)
+            lock_success = False
+
+            # Initialize the generator
+            gen = port_file_locks_generator(
+                port_stacks=port_stacks,
+                port_purposes=port_purposes_updated,
+            )
+
+            # Use the function to retrieve values from the generator
+            while not lock_success:
+                new_locks = next(gen)
+                currently_active_locks = []
+
+                try:
+                    # Atomically acquire the locks for the given ports
+                    for new_lock in new_locks:
+                        new_lock.lock_acquire()
+                        currently_active_locks.append(new_lock)
+
+                    port_args = {
+                        port_purpose: currently_active_locks[port_position].port
+                        for port_position, port_purpose in enumerate(port_purposes_updated)
+                    }
+
+                    result = func(*args, **port_args, **kwargs)
+                    lock_success = True
+
+                # Exception raised during execution of func()
+                except AddressAlreadyInUse:
+                    lock_success = False
+                    for active_lock in currently_active_locks:
+                        active_lock.unlock()
+
+                finally:
+                    # Exit loop after successful lock acquisition
+                    if lock_success:
+                        for active_lock in currently_active_locks:
+                            active_lock.unlock()
+                        break
+
+            return result
+
+        return inner
+
+    return decorator
 
 
 def opm_serve_from_index(base_dir: str, from_index: str) -> Tuple[int, subprocess.Popen]:
@@ -68,75 +278,94 @@ def opm_serve_from_index(base_dir: str, from_index: str) -> Tuple[int, subproces
     log.info('Serving data from image %s', from_index)
     if not is_image_fbc(from_index):
         db_path = _get_index_database(from_index, base_dir)
-        return opm_registry_serve(db_path)
+        return opm_registry_serve(db_path=db_path)
 
     catalog_dir = get_catalog_dir(from_index, base_dir)
-    return opm_serve(catalog_dir)
+    return opm_serve(catalog_dir=catalog_dir)
 
 
-def opm_serve(catalog_dir: str) -> Tuple[int, subprocess.Popen]:
+@create_port_filelocks(port_purposes=["opm_port", "opm_pprof_port"])
+def opm_serve(
+    opm_port: int,
+    catalog_dir: str,
+    opm_pprof_port: Optional[int] = None,
+) -> Tuple[int, subprocess.Popen]:
     """
     Locally start OPM service, which can be communicated with using gRPC queries.
 
     Due to IIB's paralellism, the service can run multiple times, which could lead to port
     binding conflicts. Resolution of port conflicts is handled in this function as well.
 
+    :param int opm_port: OPM port number obtained from create_port_filelock decorator
+    :param int opm_pprof_port: Pprof opm port number obtained from create_port_filelock decorator
     :param str catalog_dir: path to file-based catalog directory that should be served.
     :return: tuple containing port number of the running service and the running Popen object.
     :rtype: (int, Popen)
     """
     log.info('Serving data from file-based catalog %s', catalog_dir)
 
-    for port in _gen_port_for_grpc():
-        try:
-            cmd = [Opm.opm_version, 'serve', catalog_dir, '-p', str(port), '-t', '/dev/null']
-            cwd = os.path.abspath(os.path.join(catalog_dir, os.path.pardir))
-            result = (
-                port,
-                _serve_cmd_at_port_defaults(cmd, cwd, port),
-            )
-            break
-        except AddressAlreadyInUse:
-            log.debug('Port %s is already taken. Checking next one...', port)
-            continue
+    cmd = [
+        Opm.opm_version,
+        'serve',
+        catalog_dir,
+        '-p',
+        str(opm_port),
+        '-t',
+        '/dev/null',
+    ]
+
+    if opm_pprof_port:
+        # by default opm uses the 127.0.0.1:6060
+        cmd.extend(["--pprof-addr", f"127.0.0.1:{str(opm_pprof_port)}"])
+
+    cwd = os.path.abspath(os.path.join(catalog_dir, os.path.pardir))
+    result = (
+        opm_port,
+        _serve_cmd_at_port_defaults(cmd, cwd, opm_port),
+    )
     return result
 
 
-def opm_registry_serve(db_path: str) -> Tuple[int, subprocess.Popen]:
+@create_port_filelocks(port_purposes=["opm_port", "opm_pprof_port"])
+def opm_registry_serve(
+    opm_port: int,
+    db_path: str,
+    opm_pprof_port: Optional[int] = None,
+) -> Tuple[int, subprocess.Popen]:
     """
     Locally start OPM registry service, which can be communicated with using gRPC queries.
 
     Due to IIB's paralellism, the service can run multiple times, which could lead to port
     binding conflicts. Resolution of port conflicts is handled in this function as well.
 
+    :param int opm_port: OPM port number obtained from create_port_filelock decorator
+    :param int opm_pprof_port: Pprof opm port number obtained from create_port_filelock decorator
     :param str db_path: path to index database containing the registry data.
     :return: tuple containing port number of the running service and the running Popen object.
     :rtype: (int, Popen)
     """
     log.info('Serving data from index.db %s', db_path)
 
-    for port in _gen_port_for_grpc():
-        try:
-            cmd = [
-                Opm.opm_version,
-                'registry',
-                'serve',
-                '-p',
-                str(port),
-                '-d',
-                db_path,
-                '-t',
-                '/dev/null',
-            ]
-            cwd = os.path.dirname(db_path)
-            result = (
-                port,
-                _serve_cmd_at_port_defaults(cmd, cwd, port),
-            )
-            break
-        except AddressAlreadyInUse:
-            log.debug('Port %s is already taken. Checking next one...', port)
-            continue
+    cmd = [
+        Opm.opm_version,
+        'registry',
+        'serve',
+        '-p',
+        str(opm_port),
+        '-d',
+        db_path,
+        '-t',
+        '/dev/null',
+    ]
+    if opm_pprof_port:
+        # by default opm uses the 127.0.0.1:6060
+        cmd.extend(["--pprof-addr", f"127.0.0.1:{str(opm_pprof_port)}"])
+
+    cwd = os.path.dirname(db_path)
+    result = (
+        opm_port,
+        _serve_cmd_at_port_defaults(cmd, cwd, opm_port),
+    )
     return result
 
 
@@ -366,6 +595,7 @@ def opm_migrate(
 
     run_cmd(cmd, {'cwd': base_dir}, exc_msg='Failed to migrate index.db to file-based catalog')
     log.info("Migration to file-based catalog was completed.")
+    opm_validate(fbc_dir_path)
 
     if generate_cache:
         # Remove outdated cache before generating new one
@@ -486,7 +716,13 @@ def insert_cache_into_dockerfile(dockerfile_path: str) -> None:
         verify_cache_insertion_edit_dockerfile(f.readlines())
 
 
-def generate_cache_locally(base_dir: str, fbc_dir: str, local_cache_path: str) -> None:
+@create_port_filelocks(port_purposes=["opm_pprof_port"])
+def generate_cache_locally(
+    base_dir: str,
+    fbc_dir: str,
+    local_cache_path: str,
+    opm_pprof_port: Optional[int] = None,
+) -> None:
     """
     Generate the cache for the index image locally before building it.
 
@@ -509,6 +745,10 @@ def generate_cache_locally(base_dir: str, fbc_dir: str, local_cache_path: str) -
         '--termination-log',
         '/dev/null',
     ]
+
+    if opm_pprof_port:
+        # by default opm uses the 127.0.0.1:6060
+        cmd.extend(["--pprof-addr", f"127.0.0.1:{str(opm_pprof_port)}"])
 
     log.info('Generating cache for the file-based catalog')
     if os.path.exists(local_cache_path):
@@ -819,57 +1059,56 @@ def opm_registry_add_fbc_fragment(
     """
     set_request_state(request_id, 'in_progress', 'Extracting operator package from fbc_fragment')
     # fragment path will look like /tmp/iib-**/fbc-fragment
-    fragment_path, fragment_operator = extract_fbc_fragment(
+    fragment_path, fragment_operators = extract_fbc_fragment(
         temp_dir=temp_dir, fbc_fragment=fbc_fragment
     )
 
-    is_operator_in_db, index_db_path = verify_operator_exists(
+    # the dir where all the configs from from_index are stored
+    # this will look like /tmp/iib-**/configs
+    from_index_configs_dir = get_catalog_dir(from_index=from_index, base_dir=temp_dir)
+    log.info("The content of from_index configs located at %s", from_index_configs_dir)
+
+    operators_in_db, index_db_path = verify_operators_exists(
         from_index=from_index,
         base_dir=temp_dir,
-        operator_package=fragment_operator,
+        operator_packages=fragment_operators,
         overwrite_from_index_token=overwrite_from_index_token,
     )
 
-    # the dir where all the configs from from_index is stored
-    # this will look like /tmp/iib-**/configs
-    from_index_configs_dir = get_catalog_dir(from_index=from_index, base_dir=temp_dir)
+    if operators_in_db:
+        log.info('Removing %s from %s index.db ', operators_in_db, from_index)
+        _opm_registry_rm(index_db_path=index_db_path, operators=operators_in_db, base_dir=temp_dir)
 
-    log.info("The content of from_index configs located at %s", from_index_configs_dir)
-
-    if is_operator_in_db:
-        log.info('Removing %s from %s index.db ', fragment_operator, from_index)
-        _opm_registry_rm(
-            index_db_path=index_db_path, operators=[fragment_operator], base_dir=temp_dir
-        )
-        # migated_catalog_dir path will look like /tmp/iib-**/catalog
-        migated_catalog_dir, _ = opm_migrate(
+        # migrated_catalog_dir path will look like /tmp/iib-**/catalog
+        migrated_catalog_dir, _ = opm_migrate(
             index_db=index_db_path,
             base_dir=temp_dir,
             generate_cache=False,
         )
-        log.info("Migated catalog after removing from db at %s", migated_catalog_dir)
+        log.info("Migrated catalog after removing from db at %s", migrated_catalog_dir)
 
         # copy the content of migrated_catalog to from_index's config
-        log.info("Copying content of %s to %s", migated_catalog_dir, from_index_configs_dir)
-        for operator_package in os.listdir(migated_catalog_dir):
+        log.info("Copying content of %s to %s", migrated_catalog_dir, from_index_configs_dir)
+        for operator_package in os.listdir(migrated_catalog_dir):
             shutil.copytree(
-                os.path.join(migated_catalog_dir, operator_package),
+                os.path.join(migrated_catalog_dir, operator_package),
                 os.path.join(from_index_configs_dir, operator_package),
                 dirs_exist_ok=True,
             )
 
-    # copy fragment_operator to from_index configs
-    set_request_state(request_id, 'in_progress', 'Adding fbc_fragment to from_index')
-    fragment_opr_src_path = os.path.join(fragment_path, fragment_operator)
-    fragment_opr_dest_path = os.path.join(from_index_configs_dir, fragment_operator)
-    if os.path.exists(fragment_opr_dest_path):
-        shutil.rmtree(fragment_opr_dest_path)
-    log.info(
-        "Copying content of %s to %s",
-        fragment_opr_src_path,
-        fragment_opr_dest_path,
-    )
-    shutil.copytree(fragment_opr_src_path, fragment_opr_dest_path)
+    for fragment_operator in fragment_operators:
+        # copy fragment_operator to from_index configs
+        set_request_state(request_id, 'in_progress', 'Adding fbc_fragment to from_index')
+        fragment_opr_src_path = os.path.join(fragment_path, fragment_operator)
+        fragment_opr_dest_path = os.path.join(from_index_configs_dir, fragment_operator)
+        if os.path.exists(fragment_opr_dest_path):
+            shutil.rmtree(fragment_opr_dest_path)
+        log.info(
+            "Copying content of %s to %s",
+            fragment_opr_src_path,
+            fragment_opr_dest_path,
+        )
+        shutil.copytree(fragment_opr_src_path, fragment_opr_dest_path)
 
     local_cache_path = os.path.join(temp_dir, 'cache')
     generate_cache_locally(
@@ -886,32 +1125,32 @@ def opm_registry_add_fbc_fragment(
     )
 
 
-def verify_operator_exists(
+def verify_operators_exists(
     from_index: str,
     base_dir: str,
-    operator_package: str,
+    operator_packages: List[str],
     overwrite_from_index_token: Optional[str],
 ):
     """
-    Check if operator exists in index image.
+    Check if operators exists in index image.
 
     :param str from_index: index in which operator existence is checked
     :param str base_dir: base temp directory for IIB request
-    :param str operator_package: operator_package to check
+    :param list(str) operator_packages: operator_package to check
     :param str overwrite_from_index_token: token used to access the image
-    :return: is_package_in_index, index_db_path
-    :rtype: (str, str)
+    :return: packages_in_index, index_db_path
+    :rtype: (set, str)
     """
     from iib.workers.tasks.build import terminate_process, get_bundle_json
     from iib.workers.tasks.iib_static_types import BundleImage
     from iib.workers.tasks.utils import run_cmd
     from iib.workers.tasks.utils import set_registry_token
 
-    is_package_in_index = False
+    packages_in_index: Set[str] = set()
 
-    log.info("Verifying if operator package %s exists in index %s", operator_package, from_index)
+    log.info("Verifying if operator packages %s exists in index %s", operator_packages, from_index)
 
-    # check if operater package exists in hidden index.db
+    # check if operator packages exists in hidden index.db
     with set_registry_token(overwrite_from_index_token, from_index, append=True):
         index_db_path = get_hidden_index_database(from_index=from_index, base_dir=base_dir)
 
@@ -924,10 +1163,13 @@ def verify_operator_exists(
     present_bundles: List[BundleImage] = get_bundle_json(bundles)
 
     for bundle in present_bundles:
-        if bundle['packageName'] == operator_package:
-            is_package_in_index = True
-            log.info("operator package %s found in index_db %s", operator_package, index_db_path)
-    return is_package_in_index, index_db_path
+        if bundle['packageName'] in operator_packages:
+            packages_in_index.add(bundle['packageName'])
+
+    if packages_in_index:
+        log.info("operator packages found in index_db %s:  %s", index_db_path, packages_in_index)
+
+    return packages_in_index, index_db_path
 
 
 @retry(
@@ -1116,6 +1358,20 @@ def deprecate_bundles(
         run_cmd(cmd, {'cwd': base_dir}, exc_msg='Failed to deprecate the bundles')
 
 
+def opm_validate(config_dir: str) -> None:
+    """
+    Validate the declarative config files in a given directory.
+
+    :param str config_dir: directory containing the declarative config files.
+    :raises IIBError: if the validation fails
+    """
+    from iib.workers.tasks.utils import run_cmd
+
+    log.info("Validating files under %s", config_dir)
+    cmd = [Opm.opm_version, 'validate', config_dir]
+    run_cmd(cmd, exc_msg=f'Failed to validate the content from config_dir {config_dir}')
+
+
 class Opm:
     """A class to store the opm version for the IIB operation."""
 
@@ -1144,3 +1400,22 @@ class Opm:
         if index_version in opm_versions_config:
             Opm.opm_version = opm_versions_config.get(index_version)
         log.info("OPM version set to %s", Opm.opm_version)
+
+    @classmethod
+    def get_opm_version_number(cls):
+        """
+        Get the opm version number to be used for the entire IIB operation.
+
+        :return: currently set-up Opm version number
+        :rtype: str
+        """
+        log.info("Determining the OPM version number")
+
+        from iib.workers.tasks.utils import run_cmd
+
+        opm_version_output = run_cmd([Opm.opm_version, 'version'])
+        match = re.search(r'OpmVersion:"v([\d.]+)"', opm_version_output)
+        if match:
+            return match.group(1)
+        else:
+            raise IIBError("Opm version not found in the output of \"OPM version\" command")

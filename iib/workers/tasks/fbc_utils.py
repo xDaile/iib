@@ -1,15 +1,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # This file contains functions that are common for File-Based Catalog image type
+import contextlib
 import os
 import logging
 import shutil
+import json
+from pathlib import Path
+from typing import Tuple, List
 
-from typing import Tuple
+import ruamel.yaml
+
 from iib.exceptions import IIBError
 from iib.workers.config import get_worker_config
 from iib.common.tracing import instrument_tracing
 
 log = logging.getLogger(__name__)
+yaml = ruamel.yaml.YAML()
 
 
 def is_image_fbc(image: str) -> bool:
@@ -81,6 +87,8 @@ def merge_catalogs_dirs(src_config: str, dest_config: str):
     :param str src_config: source config directory
     :param str dest_config: destination config directory
     """
+    from iib.workers.tasks.opm_operations import opm_validate
+
     for conf_dir in (src_config, dest_config):
         if not os.path.isdir(conf_dir):
             msg = f"config directory does not exist: {conf_dir}"
@@ -89,15 +97,17 @@ def merge_catalogs_dirs(src_config: str, dest_config: str):
 
     log.info("Merging config folders: %s to %s", src_config, dest_config)
     shutil.copytree(src_config, dest_config, dirs_exist_ok=True)
+    enforce_json_config_dir(conf_dir)
+    opm_validate(conf_dir)
 
 
-def extract_fbc_fragment(temp_dir: str, fbc_fragment: str) -> Tuple[str, str]:
+def extract_fbc_fragment(temp_dir: str, fbc_fragment: str) -> Tuple[str, List[str]]:
     """
-    Extract operator package from the fbc_fragment image.
+    Extract operator packages from the fbc_fragment image.
 
     :param str temp_dir: base temp directory for IIB request.
     :param str fbc_fragment: pull specification of fbc_fragment in the IIB request.
-    :return: fbc_fragment path, fbc_operator_package.
+    :return: fbc_fragment path, fbc_operator_packages.
     :rtype: tuple
     """
     from iib.workers.tasks.build import _copy_files_from_image
@@ -111,10 +121,34 @@ def extract_fbc_fragment(temp_dir: str, fbc_fragment: str) -> Tuple[str, str]:
 
     log.info("fbc_fragment extracted at %s", fbc_fragment_path)
     operator_packages = os.listdir(fbc_fragment_path)
-    log.info("fbc_fragment contains package %s", operator_packages)
+    log.info("fbc_fragment contains packages %s", operator_packages)
     if not operator_packages:
         raise IIBError("No operator packages in fbc_fragment %s", fbc_fragment)
-    if len(operator_packages) > 1:
-        raise IIBError("More than 1 package is present in fbc_fragment %s", fbc_fragment)
 
-    return fbc_fragment_path, operator_packages[0]
+    return fbc_fragment_path, operator_packages
+
+
+def enforce_json_config_dir(config_dir: str) -> None:
+    """
+    Ensure the files from config dir are in JSON format.
+
+    It will walk recursively and convert any YAML files to the JSON format.
+
+    :param str config_dir: The config dir to walk recursively converting any YAML to JSON.
+    """
+    log.info("Enforcing JSON content on config_dir: %s", config_dir)
+    for dirpath, _, filenames in os.walk(config_dir):
+        for file in filenames:
+            in_file = os.path.join(dirpath, file)
+            if in_file.lower().endswith(".yaml"):
+                out_file = os.path.join(dirpath, f"{Path(in_file).stem}.json")
+                log.debug(f"Converting {in_file} to {out_file}.")
+                # Make sure the output file doesn't exist before opening in append mode
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(out_file)
+                # The input file may contain multiple chunks, we must append them accordingly
+                with open(in_file, 'r') as yaml_in, open(out_file, 'a') as json_out:
+                    data = yaml.load_all(yaml_in)
+                    for chunk in data:
+                        json.dump(chunk, json_out)
+                os.remove(in_file)

@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 
+## 8.7.5
+* Fix buildah retry mechanism by @xDaile in https://github.com/release-engineering/iib/pull/681
+* Allow non tagged index image in IIB_GRAPH_MODE_INDEX_ALLOW_LIST by @xDaile in https://github.com/release-engineering/iib/pull/661
+* Add atomic port locking mechanism by @xDaile in https://github.com/release-engineering/iib/pull/669
+* Update dependency click-didyoumean to v0.3.1 by @renovate in https://github.com/release-engineering/iib/pull/659
+* Update dependency flask-migrate to v4.0.7 by @renovate in https://github.com/release-engineering/iib/pull/664
+* Update dependency botocore to v1.34.123 by @renovate in https://github.com/release-engineering/iib/pull/679
+* Add OPM v1.40.0 to dev env by @yashvardhannanavati in https://github.com/release-engineering/iib/pull/673
+* Update dependency sqlalchemy to v2.0.30 by @renovate in https://github.com/release-engineering/iib/pull/665
+
+## 8.7.4
+* verify_operators_exists returns only unique packages by @lipoja in https://github.com/release-engineering/iib/pull/685
+
+## 8.7.3
+* Downgrade of qpid-proton by @lipoja in https://github.com/release-engineering/iib/pull/683
+
+## 8.7.2
+* Fix bug on `fbc_utils.enforce_json_config_dir` by @JAVGan in https://github.com/release-engineering/iib/pull/675
+* Update dependency cryptography to v42.0.7 by @renovate in https://github.com/release-engineering/iib/pull/674
+* Update dependency flask to v3.0.3 by @renovate in https://github.com/release-engineering/iib/pull/663
+* Use BlockingConnection class from proton.utils by @yashvardhannanavati in https://github.com/release-engineering/iib/pull/676
+
+## 8.7.1
+* Update dependency botocore to v1.34.81 by @renovate in https://github.com/release-engineering/iib/pull/662
+* Update dependency idna to v3.7 [SECURITY] by @renovate in https://github.com/release-engineering/iib/pull/666
+* Update dependency botocore to v1.34.85 by @renovate in https://github.com/release-engineering/iib/pull/667
+* Update dependency boto3 to v1.34.85 by @renovate in https://github.com/release-engineering/iib/pull/657
+* Adding support of multiple operators in one fragment by @lipoja in https://github.com/release-engineering/iib/pull/660
+* Fix bug with FBC YAML Operators by @JAVGan in https://github.com/release-engineering/iib/pull/655
+* Update dependency werkzeug to v3.0.3 [SECURITY] by @renovate in https://github.com/release-engineering/iib/pull/671
+* Update dependency jinja2 to v3.1.4 [SECURITY] by @renovate in https://github.com/release-engineering/iib/pull/670
+
+## 8.7.0
+* Adding support for new ocp_version_ranges by @lipoja in https://github.com/release-engineering/iib/pull/653
+* Fix comma bundle version validation by @xDaile in https://github.com/release-engineering/iib/pull/654
+* Update python Docker tag to v3.12.2 by @renovate in https://github.com/release-engineering/iib/pull/620
+* Use multiple OPM versions in IIB by @chandwanitulsi in https://github.com/release-engineering/iib/pull/637
+* Update actions/setup-python action to v5 by @renovate in https://github.com/release-engineering/iib/pull/648
+* Update dependency importlib-resources to v6.4.0 by @renovate in https://github.com/release-engineering/iib/pull/645
+* Update dependency botocore to v1.34.79 by @renovate in https://github.com/release-engineering/iib/pull/658
+
+
 ## 8.6.0
 * Fixing logging in tracing.py by @lipoja in https://github.com/release-engineering/iib/pull/628
 * Update dependency cryptography to v42.0.4 [SECURITY] by @renovate in https://github.com/release-engineering/iib/pull/630
